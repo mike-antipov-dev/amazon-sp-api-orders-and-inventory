@@ -13,8 +13,17 @@ use Monolog\Logger;
 use Nyholm\Psr7\Factory\Psr17Factory;
 use Illuminate\Support\Facades\DB;
 
+/**
+ * Inventory and order items importing to database using Amazon SP API
+ */
 class SpapiController extends Controller
 {
+    /**
+     * __construct
+     *
+     * @param  Psr17Factory $factory
+     * @return void
+     */
     public function __construct(Psr17Factory $factory)
     {
         $this->token = env('TOKEN');
@@ -30,8 +39,14 @@ class SpapiController extends Controller
         $this->logger->pushHandler(new StreamHandler(__DIR__ . '/sp-api-php.log', Logger::EMERGENCY));
     }
 
-    // Import inventory items to database
-    public function getInventoryItems($date_time = null) {
+    /**
+     * Import inventory items to database
+     *
+     * @param  string $date_time
+     * @return string
+     */
+    public function getInventoryItems($date_time = null)
+    {
         $sdk = SellingPartnerSDK::create($this->client, $this->factory, $this->factory, $this->configuration, $this->logger);
         $accessToken = $sdk->oAuth()->exchangeRefreshToken($this->token);
 
@@ -51,7 +66,7 @@ class SpapiController extends Controller
                 [''],
                 $next_token_db
             );
-            $next_token_res = $inventory_items->getPagination() !=null ? $inventory_items->getPagination()->getNextToken() : null;
+            $next_token_res = $inventory_items->getPagination() != null ? $inventory_items->getPagination()->getNextToken() : null;
             DB::table('tokens')
                 ->updateOrInsert(
                     ['id' => 1],
@@ -59,7 +74,7 @@ class SpapiController extends Controller
                 );
 
             $inventory_items = $inventory_items->getPayload()->getInventorySummaries();
-            $count= 0;
+            $count = 0;
 
             foreach ($inventory_items as $inventory_item) {
                 $inventory_item_data = [
@@ -78,100 +93,120 @@ class SpapiController extends Controller
                 ];
                 $res = DB::table('inventory_items')->upsert([$inventory_item_data], $ukey, $cols_to_update);
                 $res === 1 ? $count++ : null;
-        }
-        return response('Import done, ' . $count . ' records were imported.');
+            }
+            return response('Import done, ' . $count . ' records were imported.');
         } catch (ApiException $exception) {
             dump($exception->getMessage());
-            dump($exception->getResponseBody());
-            return;
+            dd($exception->getResponseBody());
         }
     }
 
-    // Import order items to database
-    public function getOrderItems($order_id) {
+    /**
+     * Import order items to database
+     *
+     * @param  int $order_id
+     * @return void
+     */
+    public function getOrderItems($order_id)
+    {
         $sdk = SellingPartnerSDK::create($this->client, $this->factory, $this->factory, $this->configuration, $this->logger);
         $accessToken = $sdk->oAuth()->exchangeRefreshToken($this->token);
 
-        try {
-            $order_items = $sdk->orders()->getOrderItems(
-                $accessToken,
-                Regions::NORTH_AMERICA,
-                $order_id
-            );
-            $order_items = $order_items->getPayload()->getOrderItems();
-            foreach ($order_items as $order_item) {
-                // Declare variables for order item data sub-objects and check if they are not null
-                $points_granted = $order_item->getPointsGranted() != null ? $order_item->getPointsGranted()->getPointsMonetaryValue() : null;
-                $shipping_price = $order_item->getShippingPrice() != null ? $order_item->getShippingPrice()->getAmount() : null;
-                $shipping_tax = $order_item->getShippingTax() != null ? $order_item->getShippingTax()->getAmount() : null;
-                $shipping_discount = $order_item->getShippingDiscount() != null ? $order_item->getShippingDiscount()->getAmount() : null;
-                $shipping_discount_tax = $order_item->getShippingDiscountTax() != null ? $order_item->getShippingDiscountTax()->getAmount() : null;
-                $cod_fee = $order_item->getCodFee() != null ? $order_item->getCodFee()->getAmount() : null;
-                $cod_fee_discount = $order_item->getCodFeeDiscount() != null ? $order_item->getCodFeeDiscount()->getAmount() : null;
-                $tax_collection_model = $order_item->getTaxCollection() != null ? $order_item->getTaxCollection()->getModel() : null;
-                $tax_collection_model = $order_item->getTaxCollection() != null ? $order_item->getTaxCollection()->getModel() : null;
-                $tax_collection_reasponsible_party  = $order_item->getTaxCollection() != null ? $order_item->getTaxCollection()->getResponsibleParty() : null;
-                $item_price = $order_item->getItemPrice() != null ? $order_item->getItemPrice()->getAmount() : null;
-                $currency_code = $order_item->getItemPrice() != null ? $order_item->getItemPrice()->getCurrencyCode() : null;
-                $item_tax = $order_item->getItemTax() != null ? $order_item->getItemTax()->getAmount() : null;
-                $promotion_discount = $order_item->getPromotionDiscount() != null ? $order_item->getPromotionDiscount()->getAmount() : null;
-                $promotion_discount_tax = $order_item->getPromotionDiscountTax() != null ? $order_item->getPromotionDiscountTax()->getAmount() : null;
+        // Retry if a rate limit is exceeded
+        for ($try = 0; $try < 5; $try++) {
+            try {
+                $order_items = $sdk->orders()->getOrderItems(
+                    $accessToken,
+                    Regions::NORTH_AMERICA,
+                    $order_id
+                );
+                $order_items = $order_items->getPayload()->getOrderItems();
+                foreach ($order_items as $order_item) {
+                    // Declare variables for order item data sub-objects and check if they are not null
+                    $points_granted = $order_item->getPointsGranted() != null ? $order_item->getPointsGranted()->getPointsMonetaryValue() : null;
+                    $shipping_price = $order_item->getShippingPrice() != null ? $order_item->getShippingPrice()->getAmount() : null;
+                    $shipping_tax = $order_item->getShippingTax() != null ? $order_item->getShippingTax()->getAmount() : null;
+                    $shipping_discount = $order_item->getShippingDiscount() != null ? $order_item->getShippingDiscount()->getAmount() : null;
+                    $shipping_discount_tax = $order_item->getShippingDiscountTax() != null ? $order_item->getShippingDiscountTax()->getAmount() : null;
+                    $cod_fee = $order_item->getCodFee() != null ? $order_item->getCodFee()->getAmount() : null;
+                    $cod_fee_discount = $order_item->getCodFeeDiscount() != null ? $order_item->getCodFeeDiscount()->getAmount() : null;
+                    $tax_collection_model = $order_item->getTaxCollection() != null ? $order_item->getTaxCollection()->getModel() : null;
+                    $tax_collection_model = $order_item->getTaxCollection() != null ? $order_item->getTaxCollection()->getModel() : null;
+                    $tax_collection_reasponsible_party  = $order_item->getTaxCollection() != null ? $order_item->getTaxCollection()->getResponsibleParty() : null;
+                    $item_price = $order_item->getItemPrice() != null ? $order_item->getItemPrice()->getAmount() : null;
+                    $currency_code = $order_item->getItemPrice() != null ? $order_item->getItemPrice()->getCurrencyCode() : null;
+                    $item_tax = $order_item->getItemTax() != null ? $order_item->getItemTax()->getAmount() : null;
+                    $promotion_discount = $order_item->getPromotionDiscount() != null ? $order_item->getPromotionDiscount()->getAmount() : null;
+                    $promotion_discount_tax = $order_item->getPromotionDiscountTax() != null ? $order_item->getPromotionDiscountTax()->getAmount() : null;
 
-                $order_item_data = [
-                    'amazon_order_id' => $order_id,
-                    'asin' => $order_item->getAsin(),
-                    'seller_sku' => $order_item->getSellerSku(),
-                    'order_item_id' => $order_item->getOrderItemId(),
-                    'title' => $order_item->getTitle(),
-                    'quantity_ordered' => $order_item->getQuantityOrdered(),
-                    'quantity_shipped' => $order_item->getQuantityShipped(),
-                    'number_of_items' => $order_item->getProductInfo()->getNumberOfItems(),
-                    'points_granted' => $points_granted,
-                    'item_price' => $item_price,
-                    'currency_code' => $currency_code,
-                    'shipping_price' => $shipping_price,
-                    'item_tax' => $item_tax,
-                    'shipping_tax' => $shipping_tax,
-                    'shipping_discount' => $shipping_discount,
-                    'shipping_discount_tax' => $shipping_discount_tax,
-                    'promotion_discount' => $promotion_discount,
-                    'promotion_discount_tax' => $promotion_discount_tax,
-                    'promotion_ids' => json_encode($order_item->getPromotionIds()),
-                    'cod_fee' => $cod_fee,
-                    'cod_fee_discount' => $cod_fee_discount,
-                    'is_gift' => $order_item->getIsGift(),
-                    'condition_note' => $order_item->getConditionNote(),
-                    'condition_id' => $order_item->getConditionId(),
-                    'condition_subtype_id' => $order_item->getConditionSubtypeId(),
-                    'scheduled_delivery_start_date' => $this->convertDate($order_item->getScheduledDeliveryStartDate()),
-                    'scheduled_delivery_end_date' => $this->convertDate($order_item->getScheduledDeliveryEndDate()),
-                    'price_designation' => $order_item->getPriceDesignation(),
-                    'tax_collection_model' => $tax_collection_model,
-                    'tax_collection_reasponsible_party' => $tax_collection_reasponsible_party,
-                    'serial_number_required' => $order_item->getSerialNumberRequired(),
-                    'is_transparency' => $order_item->getIsTransparency(),
-                    'ioss_number' => $order_item->getIossNumber(),
-                    'store_chain_store_id' => $order_item->getStoreChainStoreId(),
-                    'deemed_reseller_category' => $order_item->getDeemedResellerCategory(),
-                    'buyer_info' => $order_item->getBuyerInfo()
-                ];
-                $ukey = ['asin'];
-                $cols_to_update = [
-                    'amazon_order_id','asin','seller_sku','order_item_id','title','quantity_ordered','quantity_shipped','number_of_items','points_granted','item_price','currency_code','shipping_price','item_tax','shipping_tax','shipping_discount','shipping_discount_tax','promotion_discount','promotion_discount_tax','promotion_ids','cod_fee','cod_fee_discount','is_gift','condition_note','condition_id','condition_subtype_id','scheduled_delivery_start_date','scheduled_delivery_end_date','price_designation','tax_collection_model','tax_collection_reasponsible_party','serial_number_required','is_transparency','ioss_number','store_chain_store_id','deemed_reseller_category','buyer_info'
-                ];
-                $res = DB::table('order_items')->upsert([$order_item_data], $ukey, $cols_to_update);
+                    $order_item_data = [
+                        'amazon_order_id' => $order_id,
+                        'asin' => $order_item->getAsin(),
+                        'seller_sku' => $order_item->getSellerSku(),
+                        'order_item_id' => $order_item->getOrderItemId(),
+                        'title' => $order_item->getTitle(),
+                        'quantity_ordered' => $order_item->getQuantityOrdered(),
+                        'quantity_shipped' => $order_item->getQuantityShipped(),
+                        'number_of_items' => $order_item->getProductInfo()->getNumberOfItems(),
+                        'points_granted' => $points_granted,
+                        'item_price' => $item_price,
+                        'currency_code' => $currency_code,
+                        'shipping_price' => $shipping_price,
+                        'item_tax' => $item_tax,
+                        'shipping_tax' => $shipping_tax,
+                        'shipping_discount' => $shipping_discount,
+                        'shipping_discount_tax' => $shipping_discount_tax,
+                        'promotion_discount' => $promotion_discount,
+                        'promotion_discount_tax' => $promotion_discount_tax,
+                        'promotion_ids' => json_encode($order_item->getPromotionIds()),
+                        'cod_fee' => $cod_fee,
+                        'cod_fee_discount' => $cod_fee_discount,
+                        'is_gift' => $order_item->getIsGift(),
+                        'condition_note' => $order_item->getConditionNote(),
+                        'condition_id' => $order_item->getConditionId(),
+                        'condition_subtype_id' => $order_item->getConditionSubtypeId(),
+                        'scheduled_delivery_start_date' => $this->convertDate($order_item->getScheduledDeliveryStartDate()),
+                        'scheduled_delivery_end_date' => $this->convertDate($order_item->getScheduledDeliveryEndDate()),
+                        'price_designation' => $order_item->getPriceDesignation(),
+                        'tax_collection_model' => $tax_collection_model,
+                        'tax_collection_reasponsible_party' => $tax_collection_reasponsible_party,
+                        'serial_number_required' => $order_item->getSerialNumberRequired(),
+                        'is_transparency' => $order_item->getIsTransparency(),
+                        'ioss_number' => $order_item->getIossNumber(),
+                        'store_chain_store_id' => $order_item->getStoreChainStoreId(),
+                        'deemed_reseller_category' => $order_item->getDeemedResellerCategory(),
+                        'buyer_info' => $order_item->getBuyerInfo()
+                    ];
+                    $ukey = ['asin'];
+                    $cols_to_update = [
+                        'amazon_order_id','asin','seller_sku','order_item_id','title','quantity_ordered','quantity_shipped','number_of_items','points_granted','item_price','currency_code','shipping_price','item_tax','shipping_tax','shipping_discount','shipping_discount_tax','promotion_discount','promotion_discount_tax','promotion_ids','cod_fee','cod_fee_discount','is_gift','condition_note','condition_id','condition_subtype_id','scheduled_delivery_start_date','scheduled_delivery_end_date','price_designation','tax_collection_model','tax_collection_reasponsible_party','serial_number_required','is_transparency','ioss_number','store_chain_store_id','deemed_reseller_category','buyer_info'
+                    ];
+                    $res = DB::table('order_items')->upsert([$order_item_data], $ukey, $cols_to_update);
+                    sleep(2);
+                }
+            } catch (ApiException $exception) {
+                // Dump only if it was a final try
+                if ($try == 4) {
+                    dump($exception->getMessage());
+                    dump($exception->getResponseBody());
+                }
                 sleep(2);
+                continue;
             }
-        } catch (ApiException $exception) {
-            dump($exception->getMessage());
-            dump($exception->getResponseBody());
-            return;
+            break;
         }
     }
-    
-    public function getOrders($date = null) {
+
+    /**
+     * Get order enitites
+     *
+     * @param  mixed $date
+     * @return string
+     */
+    public function getOrders($date = null)
+    {
         // Check if a date is in a proper format
-        if ($date != null) {    
+        if ($date != null) {
             $validate = preg_match('/\d\d\d\d-\d\d-\d\d/', $date, $validate_result);
             if (empty($validate)) {
                 return response('The date must be in YYYY-MM-DD format');
@@ -191,13 +226,21 @@ class SpapiController extends Controller
                 Regions::NORTH_AMERICA,
                 [Marketplace::US()->id()],
                 $date,
-                '','','','','','','','','','',
+                '',
+                '',
+                '',
+                '',
+                '',
+                '',
+                '',
+                '',
+                '',
+                '',
                 $next_token_db
             );
         } catch (ApiException $exception) {
             dump($exception->getMessage());
-            dump($exception->getResponseBody());
-            return;
+            dd($exception->getResponseBody());
         }
 
         // Check if there is a next token in response
@@ -295,9 +338,15 @@ class SpapiController extends Controller
         return response('Import done, ' . $count . ' records were imported.');
     }
 
-    // Convert a timezone datetime to a simple datetime for MySQL compatibility
-    public function convertDate($datetime) {
-        if ($datetime != '') {   
+    /**
+     * Convert a timezone datetime to a simple datetime for MySQL compatibility
+     *
+     * @param  mixed $datetime
+     * @return string
+     */
+    public function convertDate($datetime)
+    {
+        if ($datetime != '') {
             $datetime = str_replace(['T','Z'], [' ', ''], $datetime);
         } else {
             $datetime = null;
